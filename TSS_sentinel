@@ -1,0 +1,77 @@
+// Step 1: Define Area of Interest (AOI) with the provided coordinates
+var aoi = ee.Geometry.Polygon([
+  [
+    [127.38692038431364, -1.504735220106283],
+    [127.48785727396208, -1.504735220106283],
+    [127.48785727396208, -1.4220214293259672],
+    [127.38692038431364, -1.4220214293259672],
+    [127.38692038431364, -1.504735220106283]
+  ]
+]);
+
+// Step 2: Filter Sentinel-2 Data for TSS Analysis
+var startDate = '2023-01-01';  // specify your start date
+var endDate = '2023-12-31';    // specify your end date
+
+var s2 = ee.ImageCollection('COPERNICUS/S2')
+  .filterDate(startDate, endDate)
+  .filterBounds(aoi)
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20)) // filter for low cloud cover
+  .map(function(image) {
+    // Apply scaling factors to Sentinel-2 surface reflectance bands
+    return image.divide(10000).copyProperties(image, image.propertyNames());
+  });
+
+// Step 3: Create Water Mask using NDWI
+var createWaterMask = function(image) {
+  // NDWI formula: (Green - NIR) / (Green + NIR)
+  var ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI'); // NDWI using Green (B3) and NIR (B8)
+  
+  // Threshold NDWI to identify water pixels
+  var waterMask = ndwi.gt(0.1); // Adjust threshold as needed (0 is a common starting point)
+  
+  // Apply water mask to the image
+  return image.updateMask(waterMask);
+};
+
+// Apply water mask to each image in the collection
+var s2Water = s2.map(createWaterMask);
+
+// Step 4: Calculate TSS
+var a = 10; // Example coefficient
+var b = 5;  // Example offset
+
+var calculateTSS = function(image) {
+  // Use Red (B4) and Green (B3) bands in TSS formula
+  var tss = image.expression(
+    'a * (B4 / B3) + b', {
+      'B4': image.select('B4'),
+      'B3': image.select('B3'),
+      'a': a,
+      'b': b
+    }).rename('TSS');
+  
+  return image.addBands(tss);
+};
+
+// Apply TSS calculation on each masked image in the collection
+var s2WithTSS = s2Water.map(calculateTSS);
+
+// Step 5: Visualize TSS
+var visParams = {
+  min: 0,
+  max: 100,  // Adjust based on expected TSS range
+  palette: ['blue', 'cyan', 'green', 'yellow', 'red']
+};
+
+Map.centerObject(aoi, 10);  // Adjust zoom level
+Map.addLayer(s2WithTSS.select('TSS').mean().clip(aoi), visParams, 'Average TSS');
+
+// Step 6: Export Results with 10m resolution
+Export.image.toDrive({
+  image: s2WithTSS.select('TSS').mean().clip(aoi),
+  description: 'TSS_Image',
+  scale: 10,  // Set to 10m resolution
+  region: aoi,
+  maxPixels: 1e13
+});
