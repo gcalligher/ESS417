@@ -1,0 +1,55 @@
+var roi = ee.Geometry.Polygon([
+  [127.37971060648161, -1.4974249598476264],
+  [127.48648398294645, -1.4974249598476264],
+  [127.48648398294645, -1.4274099351099296],
+  [127.37971060648161, -1.4274099351099296]
+])
+
+Map.centerObject(geometry);
+
+// sentinel-2 images 
+
+var sen = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+.select(['B8','B4','B3','B2'])
+.filterDate('2020-01-01','2020-12-31')
+.filterBounds(geometry)
+.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',10))
+.median().multiply(0.0001);
+
+Map.addLayer(sen.clip(geometry),
+      {bands:['B8','B4','B3']},'false color', false)
+
+var ndwi = sen.normalizedDifference(['B3','B8']).rename('ndwi');
+
+Map.addLayer(ndwi.clip(geometry),[],'ndwi',false);
+
+print(
+  ui.Chart.image.histogram(ndwi,geometry,100)
+  )
+  
+var thr = ndwi.gt(0.1);
+
+Map.addLayer(thr.clip(geometry),[],'thr',false)
+
+
+var sen_mask = sen.updateMask(thr);
+
+Map.addLayer(sen_mask.clip(geometry),[],'sen_mask',false)
+
+var ndti = sen_mask.normalizedDifference(['B4','B3']).rename('ndti')
+
+Map.addLayer(ndti.clip(geometry),{
+  palette: ['blue','green','yellow','orange','red']
+  }, 'ndti', true)
+
+
+Export.image.toDrive({
+  image: ndti.clip(geometry),
+  description: 'sen2_ndti',
+  region: geometry,
+  scale: 10,
+  crs: ndti.getInfo().crs,
+  maxPixels: 1e13,
+  folder: 'test'
+  })
+
